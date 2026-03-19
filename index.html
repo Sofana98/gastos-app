@@ -172,6 +172,7 @@ body { background: #F5F4F0; font-family: -apple-system, BlinkMacSystemFont, 'Seg
 <div class="toast" id="toast"></div>
 <script>
 var SCRIPT='https://script.google.com/macros/s/AKfycbyGnm9bFTNzN3HJ2idbBZrl2WRspNGUEpAp6nv-UcPyA8DuiP-S9kGAzcgAwlv-b8T_/exec';
+var CSV_URL='https://docs.google.com/spreadsheets/d/e/2PACX-1vRjyeOsp51j38139qyFqtud031CxFCjf4P3kkYyzh8LBRQUpciVwOucShA9KZD58M0tva_v7_DOoy27/pub?gid=0&single=true&output=csv';
 var CATS={"🏠 Hogar":["Alquiler","Expensas","Luz","Agua","Gas","Internet","Supermercado","Verduras / Frutas","Pollo / Carne","Delivery"],"🎉 Ocio":["Salidas (bar, cine, etc)","Viajes","Caprichos"],"🧍 Personales":["Ropa","Regalos","Estética (manicura, etc)","Abono Celular","Otros personales","Juntada amig@s"],"🚗 Auto":["Combustible","Seguro","Taller","Repuestos","Préstamos"],"🚕 Transporte":["Uber / Taxi","Colectivo"],"🏥 Salud":["Obra social","Farmacia","Psicologa","Cuidado personal"],"🐶 Mascotas":["Alimento","Veterinario","Arena","Otros"],"🏋️ Deporte":["Gimnasio","Actividades","Padel"],"💳 Deudas / Tarjeta":["Pago de tarjeta","Préstamos"],"💰 Ingresos":["Sueldo","Bonificación","Extras","Otros"]};
 var MESES=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 var state={tipo:'Gasto',pag:'Sofi',med:'Efectivo',comp:'No',debe:''};
@@ -188,6 +189,50 @@ function toast(msg){
   var el=document.getElementById('toast');
   el.textContent=msg;el.classList.add('show');
   setTimeout(function(){el.classList.remove('show');},2500);
+}
+
+function parseCSV(text){
+  var lines=text.trim().split('\n');
+  return lines.map(function(line){
+    var result=[];
+    var cur='';
+    var inQ=false;
+    for(var i=0;i<line.length;i++){
+      var c=line[i];
+      if(c==='"'){inQ=!inQ;}
+      else if(c===','&&!inQ){result.push(cur.trim());cur='';}
+      else{cur+=c;}
+    }
+    result.push(cur.trim());
+    return result;
+  });
+}
+
+function load(cb){
+  sync('syncing');
+  fetch(CSV_URL+'&t='+Date.now())
+    .then(function(r){return r.text();})
+    .then(function(text){
+      var rows=parseCSV(text);
+      entries=rows.slice(1).map(function(r){
+        return {
+          id:String(r[0]),fecha:r[1],tipo:r[2],pagador:r[3],
+          categoria:r[4],subcategoria:r[5],detalle:r[6],
+          importe:parseFloat(r[7])||0,medio:r[8],
+          compartido:r[9],quienDebe:r[10]||''
+        };
+      }).filter(function(e){return e.detalle && e.detalle.length>0;});
+      sync('ok');fillMonths();if(cb)cb();
+    })
+    .catch(function(){sync('error');toast('Sin conexión');if(cb)cb();});
+}
+
+function post(body,cb){
+  sync('syncing');
+  fetch(SCRIPT,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(body)})
+    .then(function(r){return r.text();})
+    .then(function(){sync('ok');if(cb)cb(true);})
+    .catch(function(){sync('error');if(cb)cb(false);});
 }
 
 function handleToggle(btn){
@@ -240,43 +285,25 @@ function updateSubs(){
   var cat=document.getElementById('cat').value;
   document.getElementById('subcat').innerHTML=(CATS[cat]||[]).map(function(s){return '<option value="'+s+'">'+s+'</option>';}).join('');
 }
-function mk(f){var d=new Date(f);return d.getFullYear()+'-'+d.getMonth();}
+function mk(f){
+  var d=new Date(f);
+  if(isNaN(d.getTime())) return '';
+  return d.getFullYear()+'-'+d.getMonth();
+}
 function ars(n){return '$'+Math.round(n).toLocaleString('es-AR');}
 
 function fillMonths(){
   var keys=[];
-  entries.forEach(function(e){var k=mk(e.fecha);if(keys.indexOf(k)<0)keys.push(k);});
+  entries.forEach(function(e){
+    var k=mk(e.fecha);
+    if(k && keys.indexOf(k)<0) keys.push(k);
+  });
   keys.sort().reverse();
   var now=new Date(),cur=now.getFullYear()+'-'+now.getMonth();
   if(keys.indexOf(cur)<0)keys.unshift(cur);
   var opts=keys.map(function(k){var p=k.split('-');return '<option value="'+k+'">'+MESES[+p[1]]+' '+p[0]+'</option>';}).join('');
   document.getElementById('hmes').innerHTML=opts;
   document.getElementById('rmes').innerHTML=opts;
-}
-
-function load(cb){
-  sync('syncing');
-  var s=document.createElement('script');
-  var cbName='cb_'+Date.now();
-  window[cbName]=function(data){
-    delete window[cbName];
-    document.head.removeChild(s);
-    entries=data.slice(1).map(function(r){
-      return {id:String(r[0]),fecha:r[1],tipo:r[2],pagador:r[3],categoria:r[4],subcategoria:r[5],detalle:r[6],importe:parseFloat(r[7])||0,medio:r[8],compartido:r[9],quienDebe:r[10]||''};
-    }).filter(function(e){return e.detalle;});
-    sync('ok');fillMonths();if(cb)cb();
-  };
-  s.onerror=function(){sync('error');toast('Sin conexión');if(cb)cb();};
-  s.src=SCRIPT+'?callback='+cbName+'&t='+Date.now();
-  document.head.appendChild(s);
-}
-
-function post(body,cb){
-  sync('syncing');
-  fetch(SCRIPT,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(body)})
-    .then(function(r){return r.json();})
-    .then(function(){sync('ok');if(cb)cb(true);})
-    .catch(function(){sync('error');if(cb)cb(false);});
 }
 
 document.getElementById('savebtn').addEventListener('click',function(){
@@ -289,8 +316,16 @@ document.getElementById('savebtn').addEventListener('click',function(){
   btn.disabled=true;btn.textContent='Guardando...';
   post({action:'add',id:Date.now()+'',fecha:new Date().toISOString(),tipo:state.tipo,pagador:state.pag,categoria:document.getElementById('cat').value,subcategoria:document.getElementById('subcat').value,detalle:det,importe:imp,medio:state.med,compartido:state.comp,quienDebe:state.comp==='Si'?state.debe:''},function(ok){
     btn.disabled=false;btn.textContent='Guardar gasto';
-    if(ok){document.getElementById('importe').value='';document.getElementById('detalle').value='';toast('¡Guardado!');load();}
-    else toast('Error al guardar');
+    if(ok){
+      document.getElementById('importe').value='';
+      document.getElementById('detalle').value='';
+      toast('¡Guardado!');
+      setTimeout(function(){load();},2000);
+    } else {
+      toast('Guardado! (actualizá en unos segundos)');
+      document.getElementById('importe').value='';
+      document.getElementById('detalle').value='';
+    }
   });
 });
 
@@ -332,7 +367,7 @@ function renderRes(){
 function delEntry(id){
   if(!confirm('¿Eliminás este gasto?'))return;
   post({action:'delete',id:id},function(ok){
-    if(ok){toast('Eliminado');load(renderHist);}
+    if(ok){toast('Eliminado');setTimeout(function(){load(renderHist);},2000);}
     else toast('Error al eliminar');
   });
 }
